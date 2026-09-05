@@ -1,1 +1,5 @@
-tsconfig.base.json
+{
+  "extends": "./tsconfig.base.json",
+  "files": [],
+  "include": []
+}
