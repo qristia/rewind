@@ -1,6 +1,7 @@
 // https://osu.ppy.sh/wiki/en/osu%21_File_Formats/Osu_%28file_format%29#type
 import { Position } from "@osujs/math";
 import { PathControlPoint } from "../hitobjects/slider/PathControlPoint";
+import { LegacyHitSampleInfo } from "../audio/HitSampleInfo";
 
 export type HitObjectSettingsType = "HIT_CIRCLE" | "SLIDER" | "SPINNER" | "MANIA_HOLD";
 
@@ -14,6 +15,10 @@ export interface HitObjectSettings {
   newCombo: boolean;
   // An integer specifying how many combo colours to skip, if this object starts a new combo.
   comboSkip: number;
+
+  // The hit sounds of the object as the file spells them out. They are only resolved against the sample control point
+  // active at the object's time when the beatmap is built.
+  samples: LegacyHitSampleInfo[];
 }
 
 // Not really sure if redundant
@@ -36,6 +41,9 @@ export interface SliderSettings extends HitObjectSettings {
 
   // In osu!lazer = 1. While parsing it might differ depending on osuBeatmapVersion
   tickDistanceMultiplier: 1;
+
+  // Hit sounds of each slider node: the head, one entry per repeat, and the tail.
+  nodeSamples: LegacyHitSampleInfo[][];
 }
 
 export interface SpinnerSettings extends HitObjectSettings {

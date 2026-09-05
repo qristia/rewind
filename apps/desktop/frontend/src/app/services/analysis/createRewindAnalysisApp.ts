@@ -24,6 +24,7 @@ import { SliderTextureManager } from "../renderers/components/sliders/SliderText
 import { CursorPreparer } from "../renderers/components/playfield/CursorPreparer";
 import { JudgementPreparer } from "../renderers/components/playfield/JudgementPreparer";
 import { AudioEngine } from "../common/audio/AudioEngine";
+import { HitSoundLoader } from "../common/audio/HitSoundLoader";
 import { ScenarioManager } from "../manager/ScenarioManager";
 import { ReplayFileWatcher } from "../common/local/ReplayFileWatcher";
 import { ClipRecorder } from "../manager/ClipRecorder";
@@ -63,6 +64,7 @@ export function createRewindAnalysisApp(commonContainer: Container) {
   // Assets
   container.bind(TextureManager).toSelf();
   container.bind(AudioEngine).toSelf();
+  container.bind(HitSoundLoader).toSelf();
 
   // Scenes
   container.bind(AnalysisSceneManager).toSelf();

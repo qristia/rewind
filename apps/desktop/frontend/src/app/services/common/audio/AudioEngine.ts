@@ -1,28 +1,31 @@
 import { inject, injectable, postConstruct } from "inversify";
 import { AudioSettings, AudioSettingsStore } from "./settings";
 import { STAGE_TYPES } from "../../types";
-import { GameplayClock } from "../game/GameplayClock";
+import { GameplayClock, GameplayClockSource } from "../game/GameplayClock";
+import { HitSoundEvent, HitSoundPlayer } from "./HitSoundPlayer";
 
 // HTML5 Audio supports time stretching without pitch changing (otherwise sounds like night core)
 // Chromium's implementation of <audio> is the best.
-// HTML5 Audio currentTime sucks though in terms of accuracy
+// HTML5 Audio currentTime sucks though in terms of accuracy, which is why the gameplay clock interpolates it instead
+// of reading it directly.
 
-// "AudioEngine"
+/**
+ * Owns the music track and the hit sounds, and acts as the gameplay clock's source.
+ *
+ * Both go through the same `AudioContext`, which is what keeps them in sync: the clock follows the music, and hit
+ * sounds are scheduled onto the context's clock from that same time, so the two share one timeline and one output
+ * latency.
+ */
 @injectable()
-export class AudioEngine {
+export class AudioEngine implements GameplayClockSource {
   // Just like in osu!, we can change the volume of music and samples separately
   musicGain: GainNode;
   samplesGain: GainNode;
   masterGain: GainNode;
 
-  musicUrl?: string;
-  musicBuffer?: AudioBuffer;
-
   song?: MediaElementAudioSourceNode;
 
-  // In seconds
-  sampleWindow = 0.1;
-  schedulePointer = 0;
+  private readonly hitSoundPlayer: HitSoundPlayer;
 
   constructor(
     private readonly audioSettingService: AudioSettingsStore,
@@ -36,7 +39,7 @@ export class AudioEngine {
     this.samplesGain.connect(this.masterGain);
     this.masterGain.connect(this.audioContext.destination);
 
-    // this.handleAudioSettingsChanged(this.audioSettingService.getSettings());
+    this.hitSoundPlayer = new HitSoundPlayer(this.audioContext, this.samplesGain);
   }
 
   @postConstruct()
@@ -45,18 +48,10 @@ export class AudioEngine {
     this.setupListeners();
   }
 
-  // async loadSong(songUrl: string) {
-  //   // Disconnect other one?
-  //   const audio = new HTMLAudioElement();
-  //   audio.crossOrigin = "anonymous";
-  //   audio.src = songUrl;
-  //   this.song = this.audioContext.createMediaElementSource(audio);
-  //   this.song.connect(this.musicGain);
-  // }
-  //
   setSong(audio: HTMLAudioElement) {
     this.song = this.audioContext.createMediaElementSource(audio);
     this.song.connect(this.musicGain);
+    this.gameClock.setSource(this);
   }
 
   setupListeners() {
@@ -70,6 +65,49 @@ export class AudioEngine {
     this.audioSettingService.settings$.subscribe((value) => this.handleAudioSettingsChanged(value));
   }
 
+  // --- GameplayClockSource -------------------------------------------------
+
+  get currentTimeInMs(): number {
+    return (this.song?.mediaElement.currentTime ?? 0) * 1000;
+  }
+
+  get isRunning(): boolean {
+    const element = this.song?.mediaElement;
+    if (!element) return false;
+    // `paused` clears the moment `play()` is called and `seeking` only clears once the new position is ready, so
+    // together they separate "the track is producing audio" from "the track is about to".
+    return !element.paused && !element.seeking && element.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA;
+  }
+
+  // --- Hit sounds ----------------------------------------------------------
+
+  setHitSoundSchedule(schedule: HitSoundEvent[]) {
+    this.hitSoundPlayer.setSchedule(schedule, this.gameClock.timeElapsedInMs);
+  }
+
+  setHitSoundBuffers(buffers: Map<string, AudioBuffer>) {
+    this.hitSoundPlayer.setBuffers(buffers);
+  }
+
+  /**
+   * Hands the upcoming hit sounds to the audio clock. Must be called once per frame, after the gameplay clock has
+   * been ticked, so that it works off the same time as everything else in the frame.
+   */
+  update() {
+    if (!this.gameClock.isPlaying) return;
+
+    if (!this.gameClock.isSynced) {
+      // The playhead is still free-running while the track catches up, and will jump once it takes over. Anything
+      // scheduled against it now would land at the wrong moment, so only the pointer is kept up to date.
+      this.hitSoundPlayer.resetTo(this.gameClock.timeElapsedInMs);
+      return;
+    }
+
+    this.hitSoundPlayer.update(this.gameClock.timeElapsedInMs, this.gameClock.speed);
+  }
+
+  // --- Playback ------------------------------------------------------------
+
   start() {
     // TODO: ???
     this.audioContext.resume();
@@ -77,27 +115,29 @@ export class AudioEngine {
   }
 
   pause() {
-    if (this.song) {
-      this.song.mediaElement.pause();
-      this.schedulePointer = 0;
-    }
+    this.song?.mediaElement.pause();
+    // Anything already handed to the audio clock would otherwise keep playing over the paused music.
+    this.hitSoundPlayer.resetTo(this.gameClock.timeElapsedInMs);
   }
 
   changePlaybackRate(newPlaybackRate: number) {
     if (this.song) {
       this.song.mediaElement.playbackRate = newPlaybackRate;
     }
+    // Sounds scheduled at the old rate would land at the wrong moment.
+    this.hitSoundPlayer.resetTo(this.gameClock.timeElapsedInMs);
   }
 
   // Don't know if this is accurate *enough*
   currentTime() {
-    return (this.song?.mediaElement.currentTime ?? 0) * 1000;
+    return this.currentTimeInMs;
   }
 
   seekTo(toInMs: number) {
     if (this.song) {
       this.song.mediaElement.currentTime = toInMs / 1000;
     }
+    this.hitSoundPlayer.resetTo(toInMs);
   }
 
   get isPlaying() {
@@ -115,20 +155,19 @@ export class AudioEngine {
   }
 
   destroy() {
+    this.gameClock.setSource(undefined);
+    this.hitSoundPlayer.clear();
     if (this.song) {
       this.song.disconnect();
       this.song = undefined;
     }
-    // this.pause();
-    // this.audioContext.close().then(() => {
-    //   console.log("Audio context closed.");
-    // });
   }
 
   private handleAudioSettingsChanged(settings: AudioSettings) {
-    const { muted, volume } = settings;
+    const { muted, volume, hitSoundOffsetInMs } = settings;
     this.masterGain.gain.value = muted ? 0 : volume.master;
     this.musicGain.gain.value = volume.music;
     this.samplesGain.gain.value = volume.effects;
+    this.hitSoundPlayer.setOffset(hitSoundOffsetInMs);
   }
 }

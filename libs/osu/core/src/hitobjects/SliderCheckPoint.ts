@@ -2,6 +2,7 @@ import { Slider } from "./Slider";
 import { Position, Vec2 } from "@osujs/math";
 import { HasHitTime, HasId, HasPosition } from "./Properties";
 import { SliderCheckPointType } from "./Types";
+import { HitSampleInfo } from "../audio/HitSampleInfo";
 
 // Important points on the slider. Depending on if they were "hit" or not, we will have a different judgement on the
 // slider.
@@ -17,6 +18,10 @@ export class SliderCheckPoint implements HasId, HasPosition, HasHitTime {
   offset: Position = { x: 0, y: 0 };
 
   hitTime = 0;
+
+  // Hit sounds of this checkpoint: the slider tick sample for ticks and the node sounds for repeats. The scoring
+  // "last legacy tick" is silent -- the slider's `tailSamples` cover the end of the slider instead.
+  samples: HitSampleInfo[] = [];
 
   get position(): Position {
     return Vec2.add(this.slider.startPosition, this.offset);

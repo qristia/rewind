@@ -9,6 +9,11 @@ export interface AudioSettings {
     music: number;
     effects: number;
   };
+  // Whether hit sounds shipped with the beatmap take precedence over the ones from the selected skin.
+  beatmapHitSounds: boolean;
+  // Shifts every hit sound by this many milliseconds. Positive values delay them, which is the knob to reach for when
+  // a particular audio setup plays them consistently ahead of the music.
+  hitSoundOffsetInMs: number;
 }
 
 export const DEFAULT_AUDIO_SETTINGS: AudioSettings = Object.freeze({
@@ -19,6 +24,8 @@ export const DEFAULT_AUDIO_SETTINGS: AudioSettings = Object.freeze({
     music: 1.0,
     effects: 0.25,
   },
+  beatmapHitSounds: true,
+  hitSoundOffsetInMs: 0,
 });
 export const AudioSettingsSchema: JSONSchemaType<AudioSettings> = {
   type: "object",
@@ -33,6 +40,8 @@ export const AudioSettingsSchema: JSONSchemaType<AudioSettings> = {
       },
       required: [],
     },
+    beatmapHitSounds: { type: "boolean", default: DEFAULT_AUDIO_SETTINGS.beatmapHitSounds },
+    hitSoundOffsetInMs: { type: "number", default: DEFAULT_AUDIO_SETTINGS.hitSoundOffsetInMs },
   },
   required: [],
 };
@@ -64,5 +73,13 @@ export class AudioSettingsStore extends PersistentService<AudioSettings> {
 
   setMuted(muted: boolean) {
     this.changeSettings((d) => (d.muted = muted));
+  }
+
+  setBeatmapHitSounds(beatmapHitSounds: boolean) {
+    this.changeSettings((d) => (d.beatmapHitSounds = beatmapHitSounds));
+  }
+
+  setHitSoundOffset(hitSoundOffsetInMs: number) {
+    this.changeSettings((d) => (d.hitSoundOffsetInMs = hitSoundOffsetInMs));
   }
 }

@@ -9,7 +9,7 @@ import { TimingControlPoint } from "../beatmap/ControlPoints/TimingControlPoint"
 import { DifficultyControlPoint } from "../beatmap/ControlPoints/DifficultyControlPoint";
 import { EffectControlPoint } from "../beatmap/ControlPoints/EffectControlPoint";
 import { SampleControlPoint } from "../beatmap/ControlPoints/SampleControlPoint";
-import { HitSampleInfo } from "../audio/HitSampleInfo";
+import { HitSampleInfo, LegacyHitSampleInfo } from "../audio/HitSampleInfo";
 import { LegacySampleBank } from "../audio/LegacySampleBank";
 import { HitCircleSettings, HitObjectSettings, SliderSettings, SpinnerSettings } from "./HitObjectSettings";
 import { BeatmapDifficulty } from "../beatmap/BeatmapDifficulty";
@@ -50,17 +50,6 @@ enum LegacyHitSoundType {
   Clap = 8,
 }
 
-export class LegacyHitSampleInfo extends HitSampleInfo {
-  isLayered: boolean;
-  customSampleBank: number;
-
-  constructor(name: string, bank: string | null = null, volume = 0, customSampleBank = 0, isLayered = false) {
-    super(name, bank, customSampleBank >= 2 ? customSampleBank.toString() : null, volume);
-    this.isLayered = isLayered;
-    this.customSampleBank = customSampleBank;
-  }
-}
-
 function hasFlag(bitmask: number, flag: number): boolean {
   return (bitmask & flag) !== 0;
 }
@@ -97,14 +86,87 @@ class LegacyDifficultyControlPoint extends DifficultyControlPoint {
   }
 }
 
-// https://github.com/ppy/osu/blob/82848a7d70e8bb1dbd7bed2b4a178dfe2ce94bcc/osu.Game/Rulesets/Objects/Legacy/ConvertHitObjectParser.cs#L391
+/**
+ * The sample specification of a hit object as it is written in the file, i.e. `normalSet:additionSet:index:volume:
+ * filename`. Every field is optional; whatever the object leaves out is taken from the sample control point that is
+ * active at its time.
+ *
+ * https://github.com/ppy/osu/blob/master/osu.Game/Rulesets/Objects/Legacy/ConvertHitObjectParser.cs
+ */
 type SampleBankInfo = {
-  fileName: string;
-  normal: string;
-  add: string;
+  // An overriding file name which causes all bank/index specifications to be ignored.
+  filename: string | null;
+  // Bank of the base ("hitnormal") sample. `null` means the control point decides.
+  bankForNormal: string | null;
+  // Bank of the additions ("hitwhistle", "hitfinish", "hitclap").
+  bankForAdditions: string | null;
   volume: number;
   customSampleBank: number;
 };
+
+function emptySampleBankInfo(): SampleBankInfo {
+  return { filename: null, bankForNormal: null, bankForAdditions: null, volume: 0, customSampleBank: 0 };
+}
+
+/**
+ * Maps a legacy sample set id to its bank name. Unknown ids fall back to `normal`, while `none` (0) returns `null` to
+ * signal that the hit object did not pick a bank at all.
+ */
+function legacyBankName(value: number): string | null {
+  const name = (LegacySampleBank[value] ?? LegacySampleBank[LegacySampleBank.Normal]).toLowerCase();
+  return name === "none" ? null : name;
+}
+
+/**
+ * Reads a `normalSet:additionSet:index:volume:filename` field into `bankInfo`, leaving the fields that the string does
+ * not specify untouched. With `banksOnly` — the slider's own sample field — the index, volume and file name are
+ * ignored, since for sliders those come from the per-node fields instead.
+ */
+function readCustomSampleBanks(str: string, bankInfo: SampleBankInfo, banksOnly = false): void {
+  if (!str) return;
+
+  const split = str.split(":");
+  const bank = legacyBankName(parseInt(split[0]));
+  const addBank = legacyBankName(parseInt(split[1]));
+
+  bankInfo.bankForNormal = bank;
+  bankInfo.bankForAdditions = addBank ?? bank;
+
+  if (banksOnly) return;
+
+  if (split.length > 2) bankInfo.customSampleBank = parseInt(split[2]);
+  if (split.length > 3) bankInfo.volume = Math.max(0, parseInt(split[3]));
+  bankInfo.filename = split.length > 4 && split[4].length > 0 ? split[4] : null;
+}
+
+/**
+ * Turns a hit sound bitmask together with the object's bank specification into the list of samples that the object
+ * plays.
+ */
+function convertSoundType(type: number, bankInfo: SampleBankInfo): LegacyHitSampleInfo[] {
+  const samples: LegacyHitSampleInfo[] = [];
+
+  // The normal sample is attached even when the Normal flag is not set: osu! layers it underneath the additions, and
+  // `None` counts as a plain normal sample as well.
+  samples.push(
+    new LegacyHitSampleInfo(
+      HitSampleInfo.HIT_NORMAL,
+      bankInfo.bankForNormal,
+      bankInfo.volume,
+      bankInfo.customSampleBank,
+      bankInfo.filename,
+    ),
+  );
+
+  const addition = (name: string) =>
+    new LegacyHitSampleInfo(name, bankInfo.bankForAdditions, bankInfo.volume, bankInfo.customSampleBank);
+
+  if (hasFlag(type, LegacyHitSoundType.Finish)) samples.push(addition(HitSampleInfo.HIT_FINISH));
+  if (hasFlag(type, LegacyHitSoundType.Whistle)) samples.push(addition(HitSampleInfo.HIT_WHISTLE));
+  if (hasFlag(type, LegacyHitSoundType.Clap)) samples.push(addition(HitSampleInfo.HIT_CLAP));
+
+  return samples;
+}
 
 function convertPathString(pointString: string, offset: Position): PathControlPoint[] {
   const pointSplit = pointString.split("|");
@@ -210,25 +272,18 @@ export function parseOsuHitObjectSetting(line: string): HitCircleSettings | Slid
 
   const typeBitmask = _type & ~LegacyHitObjectType.ComboSkip & ~LegacyHitObjectType.NewCombo;
 
-  // TODO: samples
   const soundType: number = parseInt(split[4]);
-  const bankInfo: SampleBankInfo = {
-    add: "",
-    customSampleBank: 0,
-    fileName: "",
-    normal: "",
-    volume: 0,
-  };
+  const bankInfo = emptySampleBankInfo();
 
   if (hasFlag(typeBitmask, LegacyHitObjectType.Circle)) {
-    // TODO: CustomSampleBanks not supported yet
-    // if (split.length > 5) readCustomSampleBanks(split[5], bankInfo);
+    if (split.length > 5) readCustomSampleBanks(split[5], bankInfo);
     return {
       type: "HIT_CIRCLE",
       time,
       position,
       newCombo,
       comboSkip,
+      samples: convertSoundType(soundType, bankInfo),
     };
   }
   if (hasFlag(typeBitmask, LegacyHitObjectType.Slider)) {
@@ -245,6 +300,34 @@ export function parseOsuHitObjectSetting(line: string): HitCircleSettings | Slid
       if (length === 0) length = undefined;
     }
 
+    // The slider's own sample field only contributes the banks; the index, volume and file name of each node come from
+    // the per-node fields below.
+    if (split.length > 10) readCustomSampleBanks(split[10], bankInfo, true);
+
+    // One node for each repeat, plus the head and the tail.
+    const nodes = repeatCount + 2;
+
+    const nodeBankInfos: SampleBankInfo[] = [];
+    for (let i = 0; i < nodes; i++) nodeBankInfos.push({ ...bankInfo });
+
+    // `edgeSets`
+    if (split.length > 9 && split[9].length > 0) {
+      const sets = split[9].split("|");
+      for (let i = 0; i < nodes && i < sets.length; i++) readCustomSampleBanks(sets[i], nodeBankInfos[i]);
+    }
+
+    const nodeSoundTypes: number[] = [];
+    for (let i = 0; i < nodes; i++) nodeSoundTypes.push(soundType);
+
+    // `edgeSounds`
+    if (split.length > 8 && split[8].length > 0) {
+      const adds = split[8].split("|");
+      for (let i = 0; i < nodes && i < adds.length; i++) {
+        const sound = parseInt(adds[i]);
+        nodeSoundTypes[i] = Number.isNaN(sound) ? 0 : sound;
+      }
+    }
+
     return {
       type: "SLIDER",
       time,
@@ -256,10 +339,13 @@ export function parseOsuHitObjectSetting(line: string): HitCircleSettings | Slid
       length,
       legacyLastTickOffset: DEFAULT_LEGACY_TICK_OFFSET,
       tickDistanceMultiplier: 1,
+      samples: convertSoundType(soundType, bankInfo),
+      nodeSamples: nodeSoundTypes.map((type, i) => convertSoundType(type, nodeBankInfos[i])),
     };
   }
   if (hasFlag(typeBitmask, LegacyHitObjectType.Spinner)) {
     const duration = Math.max(0, parseFloat(split[5]) + offset - time);
+    if (split.length > 6) readCustomSampleBanks(split[6], bankInfo);
     return {
       type: "SPINNER",
       comboSkip,
@@ -267,6 +353,7 @@ export function parseOsuHitObjectSetting(line: string): HitCircleSettings | Slid
       time,
       position,
       duration,
+      samples: convertSoundType(soundType, bankInfo),
     };
   }
   throw Error("Unknown type");
@@ -592,8 +679,7 @@ class BlueprintParser {
       const p = new SampleControlPoint();
       p.sampleBank = stringSampleSet;
       p.sampleVolume = sampleVolume;
-      // TODO:  Need LegacySampleControlPoint, but this is something we support later on
-      // p.customSampleBank = customSampleBank;
+      p.sampleIndex = customSampleBank;
       this.addControlPoint(time, p, timingChange);
     }
   }

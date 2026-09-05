@@ -1,4 +1,5 @@
 import { HasId, HasSpawnTime } from "./Properties";
+import { HitSampleInfo } from "../audio/HitSampleInfo";
 
 /**
  * Logic:
@@ -46,6 +47,9 @@ export class Spinner implements HasId, HasSpawnTime {
   duration = 0;
   spinsRequired = 1;
   maximumBonusSpins = 1;
+
+  // The hit sounds played at `endTime`.
+  samples: HitSampleInfo[] = [];
 
   // The spinner is visible way earlier, but can only be interacted with at [startTime, endTime]
   get spawnTime(): number {

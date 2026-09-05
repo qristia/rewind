@@ -3,6 +3,7 @@ import { injectable } from "inversify";
 import { AnalysisStage } from "../../renderers/components/stage/AnalysisStage";
 import { GameplayClock } from "../../common/game/GameplayClock";
 import { GameSimulator } from "../../common/game/GameSimulator";
+import { AudioEngine } from "../../common/audio/AudioEngine";
 
 // Just the normal analysis scene that updates according to a virtual game clock.
 @injectable()
@@ -11,11 +12,14 @@ export class AnalysisScene implements UserScene {
     private readonly gameClock: GameplayClock,
     private readonly gameSimulator: GameSimulator,
     private readonly analysisStage: AnalysisStage,
+    private readonly audioEngine: AudioEngine,
   ) {}
 
   update() {
     this.gameClock.tick();
     this.gameSimulator.simulate(this.gameClock.timeElapsedInMs);
+    // Scheduled off the very same time the frame is rendered at, so that what is heard and what is seen agree.
+    this.audioEngine.update();
     this.analysisStage.updateAnalysisStage();
   }
 

@@ -17,9 +17,29 @@ import { approachRateToApproachDuration, circleSizeToScale, Position } from "@os
 import { OsuHitObject } from "../hitobjects/Types";
 import { HardRockMod } from "../mods/HardRockMod";
 import { PathControlPoint } from "../hitobjects/slider/PathControlPoint";
+import { HitSampleInfo, LegacyHitSampleInfo } from "../audio/HitSampleInfo";
+
+/**
+ * osu! looks up the sample control point slightly after the hit object's own time, so that a timing point placed
+ * exactly on a note still applies to it despite rounding in the editor.
+ */
+const CONTROL_POINT_LENIENCY = 5;
 
 function copyPosition({ x, y }: Position): Position {
   return { x, y };
+}
+
+/**
+ * Resolves the samples that the file spelled out against the sample control point active at `time`, filling in the
+ * bank, custom index and volume that the hit object left to the timing point.
+ */
+function resolveSamples(
+  samples: LegacyHitSampleInfo[],
+  controlPointInfo: ControlPointInfo,
+  time: number,
+): HitSampleInfo[] {
+  const controlPoint = controlPointInfo.samplePointAt(time);
+  return samples.map((sample) => controlPoint.applyTo(sample));
 }
 
 function createHitCircle(
@@ -35,6 +55,11 @@ function createHitCircle(
   hitCircle.hitTime = hitCircleSettings.time;
   hitCircle.scale = circleSizeToScale(beatmapDifficulty.circleSize);
   hitCircle.approachDuration = approachRateToApproachDuration(beatmapDifficulty.approachRate);
+  hitCircle.samples = resolveSamples(
+    hitCircleSettings.samples,
+    controlPointInfo,
+    hitCircleSettings.time + CONTROL_POINT_LENIENCY,
+  );
   return hitCircle;
 }
 
@@ -107,7 +132,46 @@ function createSlider(
   slider.tickDistance = (scoringDistance / difficulty.sliderTickRate) * sliderSettings.tickDistanceMultiplier;
   slider.path = new SliderPath(copyPathPoints(sliderSettings.pathPoints), sliderSettings.length);
   slider.checkPoints = createSliderCheckPoints(slider);
+  assignSliderSamples(slider, sliderSettings, controlPointInfo);
   return slider;
+}
+
+/**
+ * Distributes a slider's hit sounds over its head, repeats, ticks and tail, following osu!'s `Slider.UpdateNestedSamples`.
+ *
+ * Each node is resolved against the sample control point active at that node's own time, so a slider that crosses a
+ * timing point picks up the new bank on the nodes after it.
+ */
+function assignSliderSamples(slider: Slider, settings: SliderSettings, controlPointInfo: ControlPointInfo) {
+  const { spanDuration, startTime } = slider;
+
+  const nodeSamples = settings.nodeSamples.map((samples, i) =>
+    resolveSamples(samples, controlPointInfo, startTime + i * spanDuration + CONTROL_POINT_LENIENCY),
+  );
+
+  // The slider's own samples are only used to derive the tick sound; osu! offsets their lookup by an extra
+  // millisecond so that they never pick up a timing point sitting exactly on the slider head.
+  const sliderSamples = resolveSamples(settings.samples, controlPointInfo, startTime + CONTROL_POINT_LENIENCY + 1);
+  const normalSample = sliderSamples.find((s) => s.name === HitSampleInfo.HIT_NORMAL) ?? sliderSamples[0];
+  const tickSamples = normalSample ? [normalSample.withName(HitSampleInfo.SLIDER_TICK)] : [];
+
+  slider.head.samples = nodeSamples[0] ?? [];
+  slider.tailSamples = nodeSamples[nodeSamples.length - 1] ?? [];
+
+  for (const checkPoint of slider.checkPoints) {
+    switch (checkPoint.type) {
+      case "TICK":
+        checkPoint.samples = tickSamples;
+        break;
+      case "REPEAT":
+        // The repeat that ends span `spanIndex` is node `spanIndex + 1`.
+        checkPoint.samples = nodeSamples[checkPoint.spanIndex + 1] ?? [];
+        break;
+      case "LAST_LEGACY_TICK":
+        // Silent on purpose: the slider end sound belongs to `tailSamples` and plays at `endTime`.
+        break;
+    }
+  }
 }
 
 function createSpinner(
@@ -120,6 +184,7 @@ function createSpinner(
   spinner.id = id;
   spinner.startTime = settings.time;
   spinner.duration = settings.duration;
+  spinner.samples = resolveSamples(settings.samples, controlPointInfo, spinner.endTime + CONTROL_POINT_LENIENCY);
   return spinner;
 }
 

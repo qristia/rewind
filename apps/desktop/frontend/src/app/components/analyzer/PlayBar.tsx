@@ -130,7 +130,7 @@ function AudioButton() {
   const handleClose = () => {
     setAnchorEl(null);
   };
-  const { volume, muted } = useAudioSettings();
+  const { volume, muted, beatmapHitSounds, hitSoundOffsetInMs } = useAudioSettings();
   const service = useAudioSettingsService();
 
   const handleClick = () => {
@@ -156,12 +156,15 @@ function AudioButton() {
           <BaseAudioSettingsPanel
             master={volume.master}
             music={volume.music}
-            /* Currently it's disabled */
-            effects={0}
+            effects={volume.effects}
+            beatmapHitSounds={beatmapHitSounds}
+            hitSoundOffsetInMs={hitSoundOffsetInMs}
             onMutedChange={(x) => service.setMuted(x)}
             onMasterChange={(x) => service.setMasterVolume(x)}
             onMusicChange={(x) => service.setMusicVolume(x)}
             onEffectsChange={(x) => service.setEffectsVolume(x)}
+            onBeatmapHitSoundsChange={(x) => service.setBeatmapHitSounds(x)}
+            onHitSoundOffsetChange={(x) => service.setHitSoundOffset(x)}
           />
         </Box>
       </Popover>

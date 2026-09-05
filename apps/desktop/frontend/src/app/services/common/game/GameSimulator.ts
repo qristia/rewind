@@ -125,6 +125,14 @@ export class GameSimulator {
     return this.currentState;
   }
 
+  /**
+   * The state at the very end of the replay, i.e. with every object judged. This is what the hit sound schedule is
+   * derived from, since it needs to know about every hit at once rather than only those up to the playhead.
+   */
+  getFinalState() {
+    return this.lastState;
+  }
+
   getCurrentInfo() {
     return this.currentInfo;
   }

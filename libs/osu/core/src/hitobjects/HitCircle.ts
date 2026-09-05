@@ -1,6 +1,7 @@
 import { Position } from "@osujs/math";
 import { HitObjectType } from "./Types";
 import { HasHitTime, HasId, HasPosition, HasSpawnTime } from "./Properties";
+import { HitSampleInfo } from "../audio/HitSampleInfo";
 
 export class HitCircle implements HasId, HasPosition, HasHitTime, HasSpawnTime {
   static OBJECT_RADIUS = 64;
@@ -19,6 +20,9 @@ export class HitCircle implements HasId, HasPosition, HasHitTime, HasSpawnTime {
   unstackedPosition: Position = { x: 0, y: 0 };
 
   sliderId?: string;
+
+  // The hit sounds played when this circle (or, for a slider head, this node) is hit.
+  samples: HitSampleInfo[] = [];
 
   get type(): HitObjectType {
     return "HIT_CIRCLE";

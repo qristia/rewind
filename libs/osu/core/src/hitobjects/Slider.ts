@@ -4,6 +4,7 @@ import { HitCircle } from "./HitCircle";
 import { SliderCheckPoint } from "./SliderCheckPoint";
 import { HasId } from "./Properties";
 import { HitObjectType } from "./Types";
+import { HitSampleInfo } from "../audio/HitSampleInfo";
 
 export class Slider implements HasId {
   // scoring distance with a speed-adjusted beat length of 1 second (i.e. the speed slider balls
@@ -21,6 +22,10 @@ export class Slider implements HasId {
   tickDistanceMultiplier = 1;
   legacyLastTickOffset?: number;
   repeatCount = 0;
+
+  // The hit sounds of the last slider node. osu! plays them at `endTime` rather than at the scoring "last tick",
+  // which sits `legacyLastTickOffset` earlier.
+  tailSamples: HitSampleInfo[] = [];
 
   constructor(hitCircle: HitCircle) {
     this.head = hitCircle;
